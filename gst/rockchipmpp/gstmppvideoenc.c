@@ -151,9 +151,10 @@ gst_mpp_video_enc_stop (GstVideoEncoder * encoder)
 
 static gboolean
 gst_mpp_video_enc_set_format (GstVideoEncoder * encoder,
-    GstVideoCodecState * state, MppEncConfig * mpp_cfg)
+    GstVideoCodecState * state)
 {
   GstMppVideoEnc *self = GST_MPP_VIDEO_ENC (encoder);
+  MppEncPrepCfg prep_cfg;
 
   GST_DEBUG_OBJECT (self, "Setting format: %" GST_PTR_FORMAT, state->caps);
 
@@ -167,9 +168,18 @@ gst_mpp_video_enc_set_format (GstVideoEncoder * encoder,
     return FALSE;
   }
 
+  memset (&prep_cfg, 0, sizeof (prep_cfg));
+  prep_cfg.width = GST_VIDEO_INFO_WIDTH (&state->info);
+  prep_cfg.height = GST_VIDEO_INFO_HEIGHT (&state->info);
+  /* FIXME support more pixel format here */
+  prep_cfg.format = MPP_FMT_YUV420SP;
+  /* FIXME stride */
+  if (self->mpi->control (self->mpp_ctx, MPP_ENC_SET_PREP_CFG, &prep_cfg)) {
+    GST_DEBUG_OBJECT (self, "Setting input format for rockcip mpp failed");
+    return FALSE;
+  }
+#if 0
   mpp_cfg->size = sizeof (mpp_cfg);
-  mpp_cfg->width = GST_VIDEO_INFO_WIDTH (&state->info);
-  mpp_cfg->height = GST_VIDEO_INFO_HEIGHT (&state->info);
   mpp_cfg->rc_mode = 1;
   mpp_cfg->skip_cnt = 0;
   mpp_cfg->fps_in = GST_VIDEO_INFO_FPS_N (&state->info) /
@@ -184,6 +194,7 @@ gst_mpp_video_enc_set_format (GstVideoEncoder * encoder,
     GST_DEBUG_OBJECT (self, "Setting format for rockcip mpp failed");
     return FALSE;
   }
+#endif
 
   self->input_state = gst_video_codec_state_ref (state);
 
@@ -259,7 +270,6 @@ gst_mpp_video_enc_process_buffer (GstMppVideoEnc * self, GstBuffer * buffer)
   GstFlowReturn ret;
 
   GList *l = NULL;
-  GstBuffer *hdrs;
   static gint sps_flag = 0;
   MppPacket sps_packet = NULL;
 
@@ -285,10 +295,10 @@ gst_mpp_video_enc_process_buffer (GstMppVideoEnc * self, GstBuffer * buffer)
       break;
     }
   } while (1);
-  mpp_task_meta_set_frame (task, MPP_META_KEY_INPUT_FRM, mpp_frame);
+  mpp_task_meta_set_frame (task, KEY_INPUT_FRAME, mpp_frame);
 
   mpp_packet_init_with_buffer (&packet, pkt_buf_out);
-  mpp_task_meta_set_packet (task, MPP_META_KEY_OUTPUT_PKT, packet);
+  mpp_task_meta_set_packet (task, KEY_OUTPUT_PACKET, packet);
 
   if (self->mpi->enqueue (self->mpp_ctx, MPP_PORT_INPUT, task)) {
     GST_ERROR_OBJECT (self, "mpp task input enqueu failed");
@@ -314,7 +324,7 @@ gst_mpp_video_enc_process_buffer (GstMppVideoEnc * self, GstBuffer * buffer)
     }
 
     if (task) {
-      mpp_task_meta_get_packet (task, MPP_META_KEY_OUTPUT_PKT, &packet_out);
+      mpp_task_meta_get_packet (task, KEY_OUTPUT_PACKET, &packet_out);
       g_assert (packet_out == packet);
 
       /* Get result */
@@ -562,8 +572,9 @@ gst_mpp_video_enc_class_init (GstMppVideoEncClass * klass)
   video_encoder_class->stop = GST_DEBUG_FUNCPTR (gst_mpp_video_enc_stop);
   video_encoder_class->flush = GST_DEBUG_FUNCPTR (gst_mpp_video_enc_flush);
   video_encoder_class->finish = GST_DEBUG_FUNCPTR (gst_mpp_video_enc_finish);
+  video_encoder_class->set_format =
+      GST_DEBUG_FUNCPTR (gst_mpp_video_enc_set_format);
   klass->handle_frame = GST_DEBUG_FUNCPTR (gst_mpp_video_enc_handle_frame);
-  klass->set_format = GST_DEBUG_FUNCPTR (gst_mpp_video_enc_set_format);
 
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&gst_mpp_video_enc_sink_template));

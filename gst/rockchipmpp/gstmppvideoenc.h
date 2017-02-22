@@ -79,8 +79,6 @@ struct _GstMppVideoEnc
 struct _GstMppVideoEncClass
 {
   GstVideoEncoderClass parent_class;
-  gboolean (*set_format) (GstVideoEncoder * encoder,
-    GstVideoCodecState * state, MppEncConfig * mpp_cfg);
   GstFlowReturn (*handle_frame) (GstVideoEncoder * encoder,
     GstVideoCodecFrame * frame, GstCaps * outcaps);
 };

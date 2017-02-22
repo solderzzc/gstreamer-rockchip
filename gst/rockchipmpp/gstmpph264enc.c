@@ -47,10 +47,8 @@ gst_mpp_h264_enc_set_format (GstVideoEncoder * encoder,
     GstVideoCodecState * state)
 {
   GstMppH264Enc *self = GST_MPP_H264_ENC (encoder);
-  MppEncConfig mpp_cfg;
 
-  memset (&mpp_cfg, 0, sizeof (mpp_cfg));
-
+#if 0
   mpp_cfg.size = sizeof (mpp_cfg);
   mpp_cfg.width = GST_VIDEO_INFO_WIDTH (&state->info);
   mpp_cfg.height = GST_VIDEO_INFO_HEIGHT (&state->info);
@@ -69,9 +67,9 @@ gst_mpp_h264_enc_set_format (GstVideoEncoder * encoder,
   mpp_cfg.profile = 100;
   mpp_cfg.level = 41;
   mpp_cfg.cabac_en = 0;
+#endif
 
-  return GST_MPP_VIDEO_ENC_CLASS (parent_class)->set_format (encoder, state,
-      &mpp_cfg);
+  return GST_VIDEO_ENCODER_CLASS (parent_class)->set_format (encoder, state);
 }
 
 static GstFlowReturn
