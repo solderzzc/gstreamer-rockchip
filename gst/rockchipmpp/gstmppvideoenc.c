@@ -130,6 +130,10 @@ gst_mpp_video_enc_stop (GstVideoEncoder * encoder)
     }
   }
 
+  /* Must be destroy before input_group */
+  if (self->mpp_frame)
+    mpp_frame_deinit (&self->mpp_frame);
+
   if (self->input_group) {
     mpp_buffer_group_put (self->input_group);
     self->input_group = NULL;
@@ -140,13 +144,33 @@ gst_mpp_video_enc_stop (GstVideoEncoder * encoder)
     self->output_group = NULL;
   }
 
-  if (self->mpp_frame) {
-    mpp_frame_deinit (&self->mpp_frame);
-  }
-
   GST_DEBUG_OBJECT (self, "Stopped");
 
   return TRUE;
+}
+
+static MppFrameFormat
+to_mpp_pixel (GstCaps * caps, GstVideoInfo * info)
+{
+  GstStructure *structure;
+  const gchar *mimetype;
+
+  structure = gst_caps_get_structure (caps, 0);
+  mimetype = gst_structure_get_name (structure);
+
+  if (g_str_equal (mimetype, "video/x-raw")) {
+    switch (GST_VIDEO_INFO_FORMAT (info)) {
+      case GST_VIDEO_FORMAT_I420:
+        return MPP_FMT_YUV420P;
+        break;
+      case GST_VIDEO_FORMAT_NV12:
+        return MPP_FMT_YUV420SP;
+        break;
+      default:
+        break;
+    }
+  }
+  return MPP_FMT_BUTT;
 }
 
 static gboolean
@@ -163,38 +187,21 @@ gst_mpp_video_enc_set_format (GstVideoEncoder * encoder,
       GST_DEBUG_OBJECT (self, "Compatible caps");
       goto done;
     }
-
-    GST_DEBUG_OBJECT (self, "Dynmaic update input caps in unsupported");
-    return FALSE;
   }
 
   memset (&prep_cfg, 0, sizeof (prep_cfg));
+  prep_cfg.change = MPP_ENC_PREP_CFG_CHANGE_INPUT |
+      MPP_ENC_PREP_CFG_CHANGE_FORMAT;
   prep_cfg.width = GST_VIDEO_INFO_WIDTH (&state->info);
   prep_cfg.height = GST_VIDEO_INFO_HEIGHT (&state->info);
-  /* FIXME support more pixel format here */
-  prep_cfg.format = MPP_FMT_YUV420SP;
-  /* FIXME stride */
-  if (self->mpi->control (self->mpp_ctx, MPP_ENC_SET_PREP_CFG, &prep_cfg)) {
-    GST_DEBUG_OBJECT (self, "Setting input format for rockcip mpp failed");
-    return FALSE;
-  }
-#if 0
-  mpp_cfg->size = sizeof (mpp_cfg);
-  mpp_cfg->rc_mode = 1;
-  mpp_cfg->skip_cnt = 0;
-  mpp_cfg->fps_in = GST_VIDEO_INFO_FPS_N (&state->info) /
-      GST_VIDEO_INFO_FPS_D (&state->info);
-  mpp_cfg->fps_out = GST_VIDEO_INFO_FPS_N (&state->info) /
-      GST_VIDEO_INFO_FPS_D (&state->info);
-  mpp_cfg->gop = GST_VIDEO_INFO_FPS_N (&state->info) /
-      GST_VIDEO_INFO_FPS_D (&state->info);
-  mpp_cfg->bps = mpp_cfg->width * mpp_cfg->height * 2 * mpp_cfg->fps_in;
+  prep_cfg.format = to_mpp_pixel (state->caps, &state->info);
+  prep_cfg.hor_stride = MPP_ALIGN (prep_cfg.width, 16);
+  prep_cfg.ver_stride = MPP_ALIGN (prep_cfg.height, 16);
 
-  if (self->mpi->control (self->mpp_ctx, MPP_ENC_SET_CFG, mpp_cfg)) {
-    GST_DEBUG_OBJECT (self, "Setting format for rockcip mpp failed");
+  if (self->mpi->control (self->mpp_ctx, MPP_ENC_SET_PREP_CFG, &prep_cfg)) {
+    GST_DEBUG_OBJECT (self, "Setting input format for rockchip mpp failed");
     return FALSE;
   }
-#endif
 
   self->input_state = gst_video_codec_state_ref (state);
 
@@ -269,18 +276,16 @@ gst_mpp_video_enc_process_buffer (GstMppVideoEnc * self, GstBuffer * buffer)
   MppPacket packet = NULL;
   GstFlowReturn ret;
 
-  GList *l = NULL;
   static gint sps_flag = 0;
   MppPacket sps_packet = NULL;
 
   /* Eos buffer */
+  mpp_frame_set_buffer (mpp_frame, frame_in);
   if (0 == gst_buffer_get_size (buffer)) {
-    mpp_frame_set_buffer (mpp_frame, NULL);
     mpp_frame_set_eos (mpp_frame, 1);
   } else {
     ptr = mpp_buffer_get_ptr (frame_in);
     gst_buffer_extract (buffer, 0, ptr, gst_buffer_get_size (buffer));
-    mpp_frame_set_buffer (mpp_frame, frame_in);
     mpp_frame_set_eos (mpp_frame, 0);
   }
 
@@ -290,6 +295,7 @@ gst_mpp_video_enc_process_buffer (GstMppVideoEnc * self, GstBuffer * buffer)
       return GST_FLOW_ERROR;
     }
     if (NULL == task) {
+      GST_LOG_OBJECT (self, "mpp input failed, try again");
       g_usleep (1000);
     } else {
       break;
@@ -319,8 +325,8 @@ gst_mpp_video_enc_process_buffer (GstMppVideoEnc * self, GstBuffer * buffer)
     ret = GST_FLOW_OK;
 
     if (self->mpi->dequeue (self->mpp_ctx, MPP_PORT_OUTPUT, &task)) {
-      GST_ERROR_OBJECT (self, "mpp task output dequeue failed");
-      ret = GST_FLOW_ERROR;
+      g_usleep (1000);
+      continue;
     }
 
     if (task) {
@@ -331,23 +337,26 @@ gst_mpp_video_enc_process_buffer (GstMppVideoEnc * self, GstBuffer * buffer)
       if (packet) {
         gconstpointer *ptr = mpp_packet_get_pos (packet);
         gsize len = mpp_packet_get_length (packet);
+
+        if (mpp_packet_get_eos (packet))
+          ret = GST_FLOW_EOS;
+
         /* Fill the buffer */
         if (sps_flag) {
           gst_buffer_fill (new_buffer, 0, ptr, len);
         } else {
-          if (self->mpi->control (self->mpp_ctx, MPP_ENC_GET_EXTRA_INFO,
+          if (!self->mpi->control (self->mpp_ctx, MPP_ENC_GET_EXTRA_INFO,
                   &sps_packet)) {
-            GST_ERROR_OBJECT (self, "Get Mpp extra data failed\n");
-          }
-          if (sps_packet) {
             const gpointer *sps_ptr = mpp_packet_get_pos (sps_packet);
             gsize sps_len = mpp_packet_get_length (sps_packet);
 
             gst_buffer_fill (new_buffer, 0, sps_ptr, sps_len);
-            gst_video_encoder_set_headers (encoder, l);
 
             gst_buffer_fill (new_buffer, sps_len, ptr, len);
             sps_flag = 1;
+          } else {
+            GST_ERROR_OBJECT (self, "Get Mpp extra data failed\n");
+            return GST_FLOW_ERROR;
           }
         }
 
@@ -421,13 +430,14 @@ gst_mpp_video_enc_handle_frame (GstVideoEncoder * encoder,
     packet_size =
         self->input_state->info.width * self->input_state->info.height;
 
-    if (outcaps)
+    if (!outcaps)
       goto not_negotiated;
 
     gst_caps_set_simple (outcaps,
-        "width", G_TYPE_INT, hor_stride,
-        "height", G_TYPE_INT, ver_stride, NULL);
+        "width", G_TYPE_INT, self->input_state->info.width,
+        "height", G_TYPE_INT, self->input_state->info.height, NULL);
 
+    /* Allocator buffers */
     if (mpp_buffer_group_get_internal (&self->input_group, MPP_BUFFER_TYPE_ION))
       goto activate_failed;
     if (mpp_buffer_group_get_internal (&self->output_group,
@@ -452,6 +462,9 @@ gst_mpp_video_enc_handle_frame (GstVideoEncoder * encoder,
     mpp_frame_set_height (self->mpp_frame, self->input_state->info.height);
     mpp_frame_set_hor_stride (self->mpp_frame, hor_stride);
     mpp_frame_set_ver_stride (self->mpp_frame, ver_stride);
+
+    if (self->mpi->poll (self->mpp_ctx, MPP_PORT_INPUT, MPP_POLL_BLOCK))
+      GST_ERROR_OBJECT (self, "mpp input poll failed");
 
     gst_video_encoder_set_output_state (encoder, outcaps, self->input_state);
     self->outcaps = outcaps;
@@ -534,8 +547,8 @@ gst_mpp_video_enc_finish (GstVideoEncoder * encoder)
 
   /* Send a empty buffer to send eos frame to rockchip mpp */
   buffer = gst_buffer_new ();
+  /* buffer would be release here */
   gst_mpp_video_enc_process_buffer (self, buffer);
-  gst_buffer_unref (buffer);
 
   /* Wait the task in srcpad get eos package */
   while (g_atomic_int_get (&self->processing));
@@ -572,9 +585,8 @@ gst_mpp_video_enc_class_init (GstMppVideoEncClass * klass)
   video_encoder_class->stop = GST_DEBUG_FUNCPTR (gst_mpp_video_enc_stop);
   video_encoder_class->flush = GST_DEBUG_FUNCPTR (gst_mpp_video_enc_flush);
   video_encoder_class->finish = GST_DEBUG_FUNCPTR (gst_mpp_video_enc_finish);
-  video_encoder_class->set_format =
-      GST_DEBUG_FUNCPTR (gst_mpp_video_enc_set_format);
   klass->handle_frame = GST_DEBUG_FUNCPTR (gst_mpp_video_enc_handle_frame);
+  klass->set_format = GST_DEBUG_FUNCPTR (gst_mpp_video_enc_set_format);
 
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&gst_mpp_video_enc_sink_template));
