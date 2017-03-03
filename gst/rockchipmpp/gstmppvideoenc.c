@@ -203,8 +203,8 @@ gst_mpp_video_enc_set_format (GstVideoEncoder * encoder,
   prep_cfg.width = GST_VIDEO_INFO_WIDTH (&state->info);
   prep_cfg.height = GST_VIDEO_INFO_HEIGHT (&state->info);
   prep_cfg.format = to_mpp_pixel (state->caps, &state->info);
-  prep_cfg.hor_stride = MPP_ALIGN (prep_cfg.width, 16);
-  prep_cfg.ver_stride = MPP_ALIGN (prep_cfg.height, 16);
+  prep_cfg.hor_stride = MPP_ALIGN (prep_cfg.width, 8);
+  prep_cfg.ver_stride = MPP_ALIGN (prep_cfg.height, 8);
 
   if (self->mpi->control (self->mpp_ctx, MPP_ENC_SET_PREP_CFG, &prep_cfg)) {
     GST_DEBUG_OBJECT (self, "Setting input format for rockchip mpp failed");
