@@ -656,7 +656,6 @@ gst_mpp_video_dec_class_init (GstMppVideoDecClass * klass)
 {
   GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
   GstVideoDecoderClass *video_decoder_class = GST_VIDEO_DECODER_CLASS (klass);
-  GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
 
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&gst_mpp_video_dec_src_template));
