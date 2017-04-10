@@ -21,6 +21,7 @@ libeglgles_la_CFLAGS =				\
 libeglgles_la_LIBADD =				\
 	$(X11_LIBS)				\
 	$(ARMMALI_LIBS)				\
+	-lEGL -lGLESv2 \
 	$(GST_PLUGINS_BASE_LIBS)		\
 	$(GST_BASE_LIBS)			\
 	$(GST_VIDEO_LIBS)                       \
