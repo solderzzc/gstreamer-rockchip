@@ -301,7 +301,12 @@ gst_mpp_video_dec_stop (GstVideoDecoder * decoder)
 static gboolean
 gst_mpp_video_dec_open (GstMppVideoDec * self, MppCodingType codec_format)
 {
+  gint io_mode = MPP_IO_MODE_SIMPLE;
+
   mpp_create (&self->mpp_ctx, &self->mpi);
+
+  self->mpi->control (self->mpp_ctx, MPP_SET_TRANSACTION_MODE,
+      (gpointer) & io_mode);
 
   GST_DEBUG_OBJECT (self, "created mpp context %p", self->mpp_ctx);
 
