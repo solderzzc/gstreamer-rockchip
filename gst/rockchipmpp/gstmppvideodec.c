@@ -493,8 +493,8 @@ gst_mpp_video_dec_handle_frame (GstVideoDecoder * decoder,
   if (!gst_buffer_pool_is_active (pool)) {
     GstBuffer *codec_data;
     gint block_flag = MPP_POLL_BLOCK;
-    /* at least 50ms */
-    gint64 block_timeout = 50;
+    /* at least 200 */
+    gint64 block_timeout = 200;
     GstMppReturn ret = GST_MPP_OK;
 
     codec_data = self->input_state->codec_data;
@@ -549,10 +549,6 @@ gst_mpp_video_dec_handle_frame (GstVideoDecoder * decoder,
       /* activate the pool: the buffers are allocated */
       if (gst_buffer_pool_set_active (self->pool, TRUE) == FALSE)
         goto error_activate_pool;
-
-      block_timeout = -1;
-      self->mpi->control (self->mpp_ctx, MPP_SET_OUTPUT_BLOCK_TIMEOUT,
-          (gpointer) & block_timeout);
 
       self->mpi->control (self->mpp_ctx, MPP_DEC_SET_INFO_CHANGE_READY, NULL);
     } else if (ret == GST_MPP_ERROR) {
